@@ -25,6 +25,7 @@
 
 ## 构建与发布
 
+- 使用 `gradle/actions/setup-gradle` 缓存 Wrapper、依赖、Java 工具链和 Gradle 缓存；`--build-cache` 开启可缓存任务输出的复用。无需与 setup-java 的 Gradle 缓存重复配置。输入变化的任务仍会重新执行，签名密钥不缓存。
 - 每次锁定上游完整提交 SHA，使用上游 Gradle Wrapper、JDK 21 和配置要求的 Android SDK。
 - 上游引用未提交的 `keystore/proguard-custom.txt`，CI 生成固定命名字典（`lt0000`～`lt0fff`），保留上游全部混淆规则。
 - 执行 `:app:assembleRelease`，保留上游混淆、压缩、包名与功能代码。
