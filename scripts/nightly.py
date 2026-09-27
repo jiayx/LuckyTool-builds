@@ -69,6 +69,9 @@ def prepare():
     # is not the distribution key; the latter is only available on the release runner.
     keys = source / 'keystore'
     keys.mkdir(exist_ok=True)
+    # Upstream references its untracked naming dictionary in proguard-rules.pro.
+    # Supply deterministic identifiers while retaining all upstream keep/optimization rules.
+    (keys / 'proguard-custom.txt').write_text(''.join(f'lt{i:04x}\n' for i in range(4096)))
     key = (keys / 'build.p12').resolve()
     run('keytool', '-genkeypair', '-noprompt', '-keystore', str(key), '-storetype', 'PKCS12',
         '-storepass', 'temporary-build', '-keypass', 'temporary-build', '-alias', 'build',
@@ -106,7 +109,7 @@ def collect():
                 versionCode=version_code(os.environ['GITHUB_RUN_NUMBER']),
                 workflow_commit=os.environ['GITHUB_SHA'],
                 run=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-                build_type='release', version_override='app/version.properties: versionCode - 1 before Gradle')
+                build_type='release', obfuscation_dictionary='lt0000 through lt0fff', version_override='app/version.properties: versionCode - 1 before Gradle')
     (artifact / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
 
 
@@ -175,7 +178,7 @@ def publish():
 
 下载 `LuckyTool-nightly.apk` 安装，在 LSPosed 中启用并按原版要求选择作用域。
 与官方签名不同，通常不能直接覆盖官方版；本仓库后续构建保持同一签名。
-编译成功不代表所有功能已在设备上验证。源码快照随附件提供；仅覆盖构建版本号，未修改业务代码。
+编译成功不代表所有功能已在设备上验证。源码快照随附件提供；补齐签名、混淆字典并覆盖构建版本号，未修改业务代码。
 ''')
     if not release:
         run('gh', 'release', 'create', tag, '--repo', repo, '--target', os.environ['GITHUB_SHA'],

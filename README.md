@@ -26,6 +26,7 @@
 ## 构建与发布
 
 - 每次锁定上游完整提交 SHA，使用上游 Gradle Wrapper、JDK 21 和配置要求的 Android SDK。
+- 上游引用未提交的 `keystore/proguard-custom.txt`，CI 生成固定命名字典（`lt0000`～`lt0fff`），保留上游全部混淆规则。
 - 执行 `:app:assembleRelease`，保留上游混淆、压缩、包名与功能代码。
 - versionCode 为 `1000000000 + github.run_number`，通过上游 `version.properties` 输入；APK versionName 保留上游值。迁移工作流或仓库时须继续原有版本序列。
 - 发布标签为 `nightly-<完整上游 SHA>`，避免重复发布。先上传完整 draft，再公开为 prerelease；中断后可重试。
