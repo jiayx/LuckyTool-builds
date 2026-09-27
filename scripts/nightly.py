@@ -1,5 +1,7 @@
 """Build, sign, and publish upstream LuckyTool releases."""
 import base64
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import hashlib
 import json
 import os
@@ -46,13 +48,40 @@ def version_code(run_number):
     return 1_000_000_000 + number
 
 
+def release_tag(sha, now=None):
+    if not re.fullmatch('[0-9a-f]{40}', sha):
+        raise ValueError('Invalid upstream SHA')
+    now = now or datetime.now(ZoneInfo('Asia/Shanghai'))
+    date = now.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
+    return f'nightly-{date}-{sha[:8]}'
+
+
+def release_for_commit(repo, sha):
+    link = f'https://github.com/{UPSTREAM}/commit/{sha}'
+    candidate = None
+    page = 1
+    while True:
+        releases = api(f'repos/{repo}/releases?per_page=100&page={page}')
+        if releases is None:
+            raise RuntimeError('Cannot list repository releases')
+        for release in releases:
+            if f']({link})' not in (release.get('body') or ''):
+                continue
+            if published(release):
+                return release
+            candidate = candidate or release
+        if len(releases) < 100:
+            return candidate
+        page += 1
+
+
 def plan():
     head = api(f'repos/{UPSTREAM}/commits/main')
     if not head or not re.fullmatch('[0-9a-f]{40}', head['sha']):
         raise RuntimeError('Cannot resolve upstream main')
     sha = head['sha']
-    tag = 'nightly-' + sha
-    release = api(f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{tag}")
+    release = release_for_commit(os.environ['GITHUB_REPOSITORY'], sha)
+    tag = release['tag_name'] if release else release_tag(sha)
     build = not published(release)
     artifact_run = os.environ['GITHUB_RUN_ID']
     build_number = os.environ['GITHUB_RUN_NUMBER']
@@ -182,28 +211,26 @@ def sign():
 def publish():
     repo = os.environ['GITHUB_REPOSITORY']
     sha = os.environ['UPSTREAM_SHA']
-    tag = 'nightly-' + sha
-    release = api(f'repos/{repo}/releases/tags/{tag}')
+    tag = os.environ['RELEASE_TAG']
+    if not re.fullmatch(r'nightly-\d{4}-\d{2}-\d{2}-' + sha[:8], tag):
+        raise RuntimeError('Release tag does not match upstream commit')
+    release = release_for_commit(repo, sha)
     if published(release):
         return
+    if release and release['tag_name'] != tag:
+        raise RuntimeError('Release changed after planning; retry the workflow')
     if release and not release['draft']:
         raise RuntimeError('Existing published release is incomplete; inspect it before retrying')
-    info = json.loads(Path('artifact/build.json').read_text())
     notes = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
-    notes.write_text(f'''非官方 LuckyTool Nightly 预发布，适用于 LSPosed。
+    notes.write_text(f'''LuckyTool 非官方 Nightly，适用于 LSPosed。
 
-- 上游提交：[ {sha[:12]} ](https://github.com/{UPSTREAM}/commit/{sha})
-- 构建类型：Release；versionCode：{info['versionCode']}
-- 构建记录：{info['run']}
-- 签名证书 SHA-256：`{info['certificate_sha256']}`
+上游版本：[{sha[:8]}](https://github.com/{UPSTREAM}/commit/{sha})
 
-下载 `LuckyTool-nightly.apk` 安装，在 LSPosed 中启用并选择作用域。
-本仓库使用固定的独立签名，后续版本可覆盖升级。从官方版或其他签名版本切换时，通常需要先备份配置、卸载，再安装。
-附件包含安装包、SHA256 校验和、构建记录及对应上游源码快照。
+下载下方附件 `LuckyTool-nightly.apk`，安装后在 LSPosed 中启用并选择作用域。
 ''')
     if not release:
         run('gh', 'release', 'create', tag, '--repo', repo, '--target', os.environ['GITHUB_SHA'],
-            '--draft', '--prerelease', '--title', 'LuckyTool nightly · ' + sha[:12], '--notes-file', str(notes))
+            '--draft', '--prerelease', '--title', f'LuckyTool nightly · {tag[8:18]} · {sha[:8]}', '--notes-file', str(notes))
     run('gh', 'release', 'upload', tag, '--repo', repo, '--clobber',
         *(str(Path('artifact') / name) for name in sorted(EXPECTED_ASSETS)))
     run('gh', 'release', 'edit', tag, '--repo', repo, '--draft=false', '--prerelease', '--notes-file', str(notes))

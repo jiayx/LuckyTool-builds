@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.plan.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
       build: ${{ steps.plan.outputs.build }}
       reuse: ${{ steps.plan.outputs.reuse }}
       artifact_run: ${{ steps.plan.outputs.artifact_run }}
@@ -114,5 +115,6 @@ jobs:
         run: python3 scripts/nightly.py sign
       - name: Publish complete nightly release
         env:
+          RELEASE_TAG: ${{ needs.check.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/nightly.py publish
