@@ -54,8 +54,27 @@ def plan():
     tag = 'nightly-' + sha
     release = api(f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{tag}")
     build = not published(release)
+    artifact_run = os.environ['GITHUB_RUN_ID']
+    build_number = os.environ['GITHUB_RUN_NUMBER']
+    reuse = os.environ.get('REUSE_RUN', '').strip()
+    if reuse and build:
+        if not reuse.isdigit():
+            raise ValueError('Build run ID must be numeric')
+        repo = os.environ['GITHUB_REPOSITORY']
+        previous = api(f'repos/{repo}/actions/runs/{reuse}')
+        if not previous or previous['head_repository']['full_name'] != repo or previous['head_branch'] != 'main' or previous['path'] != '.github/workflows/nightly.yml':
+            raise RuntimeError('Only this repository main-branch nightly artifacts may be reused')
+        jobs = api(f'repos/{repo}/actions/runs/{reuse}/jobs')
+        if not any(j['name'] == 'build' and j['conclusion'] == 'success' for j in jobs['jobs']):
+            raise RuntimeError('Selected run has no successful build')
+        artifacts = api(f'repos/{repo}/actions/runs/{reuse}/artifacts')
+        if not any(a['name'] == 'upstream-release' and not a['expired'] for a in artifacts['artifacts']):
+            raise RuntimeError('Selected build artifact is unavailable')
+        artifact_run = reuse
+        build_number = str(previous['run_number'])
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write(f'sha={sha}\ntag={tag}\nbuild={str(build).lower()}\n')
+        output.write(f'reuse={str(bool(reuse and build)).lower()}\nartifact_run={artifact_run}\nbuild_number={build_number}\n')
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
         summary.write(f'Upstream: [{sha}](https://github.com/{UPSTREAM}/commit/{sha})\n\n')
         summary.write('New or incomplete release: build required.\n' if build else 'Already published; skipped.\n')
@@ -121,7 +140,7 @@ def sign():
     artifact = Path('artifact')
     apk = artifact / 'LuckyTool-nightly.apk'
     info = json.loads((artifact / 'build.json').read_text())
-    if info['commit'] != os.environ['UPSTREAM_SHA'] or info['versionCode'] != version_code(os.environ['GITHUB_RUN_NUMBER']):
+    if info['commit'] != os.environ['UPSTREAM_SHA'] or info['versionCode'] != version_code(os.environ['BUILD_RUN_NUMBER']):
         raise RuntimeError('Artifact provenance mismatch')
     tools = Path(os.environ['ANDROID_HOME']) / 'build-tools'
     versions = [p for p in tools.iterdir() if re.fullmatch(r'\d+\.\d+\.\d+', p.name)]
@@ -147,13 +166,13 @@ def sign():
         run(signer, 'sign', '--ks', str(key), '--ks-key-alias', os.environ['SIGNING_KEY_ALIAS'],
             '--ks-pass', 'env:SIGNING_STORE_PASSWORD', '--key-pass', 'env:SIGNING_KEY_PASSWORD',
             '--out', str(signed), str(apk))
-        certificate = run(signer, 'verify', '--verbose', '--print-certs', str(signed))
-        digest = re.search(r'Signer #1 certificate SHA-256 digest: ([0-9a-f]+)', certificate)
-        if not digest:
-            raise RuntimeError('Signed APK verification failed')
+        run(signer, 'verify', '--verbose', str(signed))
+        certificate = subprocess.check_output(['keytool', '-exportcert', '-keystore', str(key),
+            '-alias', os.environ['SIGNING_KEY_ALIAS'], '-storepass:env', 'SIGNING_STORE_PASSWORD'])
+        digest = hashlib.sha256(certificate).hexdigest()
         signed.replace(apk)
         (artifact / 'signed.apk.idsig').unlink(missing_ok=True)
-        info['certificate_sha256'] = digest[1]
+        info['certificate_sha256'] = digest
         (artifact / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
     finally:
         key.unlink(missing_ok=True)

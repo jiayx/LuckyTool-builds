@@ -4,9 +4,15 @@ on:
   schedule:
     - cron: '17 15 * * *' # Every day at 23:17 Asia/Shanghai (UTC+8)
   workflow_dispatch:
+    inputs:
+      reuse_build_run:
+        description: 'Optional: retry publishing an existing successful build run ID'
+        type: string
+        required: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: luckytool-nightly
@@ -19,6 +25,9 @@ jobs:
     outputs:
       sha: ${{ steps.plan.outputs.sha }}
       build: ${{ steps.plan.outputs.build }}
+      reuse: ${{ steps.plan.outputs.reuse }}
+      artifact_run: ${{ steps.plan.outputs.artifact_run }}
+      build_number: ${{ steps.plan.outputs.build_number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,12 +35,13 @@ jobs:
       - name: Check upstream and completed releases
         id: plan
         env:
+          REUSE_RUN: ${{ inputs.reuse_build_run }}
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/nightly.py plan
 
   build:
     needs: check
-    if: needs.check.outputs.build == 'true'
+    if: needs.check.outputs.build == 'true' && needs.check.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -69,10 +79,12 @@ jobs:
 
   release:
     needs: [check, build]
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.check.outputs.build == 'true' && (needs.build.result == 'success' || needs.check.outputs.reuse == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     env:
       UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
     steps:
@@ -83,6 +95,8 @@ jobs:
         with:
           name: upstream-release
           path: artifact
+          run-id: ${{ needs.check.outputs.artifact_run }}
+          github-token: ${{ github.token }}
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
@@ -92,6 +106,7 @@ jobs:
           packages: 'build-tools;37.0.0'
       - name: Validate and sign APK on a separate runner
         env:
+          BUILD_RUN_NUMBER: ${{ needs.check.outputs.build_number }}
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}

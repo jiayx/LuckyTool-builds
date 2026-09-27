@@ -2,7 +2,7 @@
 
 [上游 LuckyTool](https://github.com/luckyzyx/LuckyTool) 的非官方自动构建，提供可在 **LSPosed** 中启用的 Release APK。保留上游业务代码、Xposed 入口及作用域；不包含 Zygisk 移植。
 
-每天北京时间 **23:17** 检查上游 `main`。该提交已有完整发布时直接退出；失败或未发布的提交会在下次运行重试。支持 Actions → LuckyTool nightly → Run workflow 手动触发。
+每天北京时间 **23:17** 检查上游 `main`。该提交已有完整发布时直接退出；失败或未发布的提交会在下次运行重试。支持 Actions → LuckyTool nightly → Run workflow 手动触发。若构建成功但发布失败，可在 `reuse_build_run` 填入该次 run ID，只重试签名发布；仅接受本仓库 main 分支的成功构建，且 APK 中记录的上游 SHA 必须仍与当前上游一致。构建产物保留 7 天。
 
 从本仓库 Releases 下载 `LuckyTool-nightly.apk`，安装后在 LSPosed 中启用并选择作用域。Nightly 属于预发布，编译通过不代表所有功能经过实机验证。
 
