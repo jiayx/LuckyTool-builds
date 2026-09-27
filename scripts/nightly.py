@@ -1,4 +1,4 @@
-"""Small, dependency-free helpers for the upstream build/release workflow."""
+"""Build, sign, and publish upstream LuckyTool releases."""
 import base64
 import hashlib
 import json
@@ -84,12 +84,10 @@ def prepare():
     source = Path('upstream')
     if run('git', '-C', str(source), 'rev-parse', 'HEAD') != os.environ['UPSTREAM_SHA']:
         raise RuntimeError('Unexpected source revision')
-    # Upstream requires a keystore even for configuration. This disposable build key
-    # is not the distribution key; the latter is only available on the release runner.
+    # Gradle uses a temporary key; the release runner holds the distribution key.
     keys = source / 'keystore'
     keys.mkdir(exist_ok=True)
-    # Upstream references its untracked naming dictionary in proguard-rules.pro.
-    # Supply deterministic identifiers while retaining all upstream keep/optimization rules.
+    # Generate the naming dictionary referenced by upstream proguard-rules.pro.
     (keys / 'proguard-custom.txt').write_text(''.join(f'lt{i:04x}\n' for i in range(4096)))
     key = (keys / 'build.p12').resolve()
     run('keytool', '-genkeypair', '-noprompt', '-keystore', str(key), '-storetype', 'PKCS12',
@@ -106,7 +104,7 @@ def prepare():
         raise RuntimeError('Upstream SDK configuration changed; update the workflow')
     available = run('sdkmanager', '--list')
     packages = {line.split('|')[0].strip() for line in available.splitlines() if '|' in line}
-    # Recent SDKs use an explicit minor version, e.g. android-37.0.
+    # Resolve SDK package names with an optional explicit minor version.
     platform = next((p for p in (f'platforms;android-{sdk[1]}', f'platforms;android-{sdk[1]}.0') if p in packages), None)
     if platform is None:
         raise RuntimeError(f'Official SDK platform {sdk[1]} is not available')
@@ -121,7 +119,7 @@ def collect():
     artifact = Path('artifact')
     artifact.mkdir()
     (artifact / 'LuckyTool-nightly.apk').write_bytes(apks[0].read_bytes())
-    # Archive committed upstream sources, not generated keys or local build output.
+    # Archive the exact upstream commit recorded in the build metadata.
     run('git', '-C', str(source), 'archive', '--format=tar.gz',
         '--output=' + str((artifact / 'upstream-source.tar.gz').resolve()), 'HEAD')
     info = dict(upstream=UPSTREAM, commit=os.environ['UPSTREAM_SHA'],
@@ -192,16 +190,16 @@ def publish():
         raise RuntimeError('Existing published release is incomplete; inspect it before retrying')
     info = json.loads(Path('artifact/build.json').read_text())
     notes = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
-    notes.write_text(f'''非官方 LuckyTool 自动构建，适用于 LSPosed。使用上游原版功能与作用域。
+    notes.write_text(f'''非官方 LuckyTool Nightly 预发布，适用于 LSPosed。
 
 - 上游提交：[ {sha[:12]} ](https://github.com/{UPSTREAM}/commit/{sha})
 - 构建类型：Release；versionCode：{info['versionCode']}
 - 构建记录：{info['run']}
 - 签名证书 SHA-256：`{info['certificate_sha256']}`
 
-下载 `LuckyTool-nightly.apk` 安装，在 LSPosed 中启用并按原版要求选择作用域。
-与官方签名不同，通常不能直接覆盖官方版；本仓库后续构建保持同一签名。
-编译成功不代表所有功能已在设备上验证。源码快照随附件提供；补齐签名、混淆字典并覆盖构建版本号，未修改业务代码。
+下载 `LuckyTool-nightly.apk` 安装，在 LSPosed 中启用并选择作用域。
+本仓库使用固定的独立签名，后续版本可覆盖升级。从官方版或其他签名版本切换时，通常需要先备份配置、卸载，再安装。
+附件包含安装包、SHA256 校验和、构建记录及对应上游源码快照。
 ''')
     if not release:
         run('gh', 'release', 'create', tag, '--repo', repo, '--target', os.environ['GITHUB_SHA'],
