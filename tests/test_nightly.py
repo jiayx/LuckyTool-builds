@@ -19,6 +19,12 @@ class Contracts(unittest.TestCase):
         self.assertFalse(nightly.published(release))
         self.assertFalse(nightly.published(None))
 
+    def test_xposed_metadata_accepts_aapt2_boolean_but_not_false(self):
+        text = 'A: http://schemas.android.com/apk/res/android:name(0x01010003)="xposedmodule" (Raw: "xposedmodule")\n  A: http://schemas.android.com/apk/res/android:value(0x01010024)=true\n'
+        self.assertTrue(nightly.has_xposed_metadata(text))
+        self.assertFalse(nightly.has_xposed_metadata(text.replace('=true', '=false')))
+        self.assertFalse(nightly.has_xposed_metadata(text.replace('xposedmodule', 'other')))
+
     def test_versions_are_monotonic_and_bounded(self):
         self.assertLess(nightly.version_code('1'), nightly.version_code('2'))
         self.assertLess(nightly.version_code('999999999'), 2_100_000_000)

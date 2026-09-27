@@ -113,6 +113,10 @@ def collect():
     (artifact / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
 
 
+def has_xposed_metadata(manifest):
+    return bool(re.search(r'"xposedmodule"[^\n]*\n\s*A: (?:android:|http://schemas.android.com/apk/res/android:)value[^\n]*=(?:true|\(type 0x12\)0xffffffff)\s*(?:\n|$)', manifest))
+
+
 def sign():
     artifact = Path('artifact')
     apk = artifact / 'LuckyTool-nightly.apk'
@@ -129,7 +133,7 @@ def sign():
     if 'application-debuggable' in badging:
         raise RuntimeError('Refusing debuggable APK')
     manifest = run(aapt, 'dump', 'xmltree', str(apk), '--file', 'AndroidManifest.xml')
-    if not re.search(r'"xposedmodule"[^\n]*\n\s*A: android:value[^\n]*0xffffffff', manifest):
+    if not has_xposed_metadata(manifest):
         raise RuntimeError('Missing enabled Xposed module metadata')
     with zipfile.ZipFile(apk) as archive:
         if not archive.read('assets/xposed_init').strip():
