@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.p12
+*.jks
+*.keystore
+.env
+artifact/
+upstream/
