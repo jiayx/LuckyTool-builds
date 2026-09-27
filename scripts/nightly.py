@@ -82,7 +82,13 @@ def prepare():
     sdk = re.search(r'extra\["compileSdkVersion"\]\s*=\s*(\d+)', config)
     if not sdk:
         raise RuntimeError('Upstream SDK configuration changed; update the workflow')
-    run('sdkmanager', f'platforms;android-{sdk[1]}')
+    available = run('sdkmanager', '--list')
+    packages = {line.split('|')[0].strip() for line in available.splitlines() if '|' in line}
+    # Recent SDKs use an explicit minor version, e.g. android-37.0.
+    platform = next((p for p in (f'platforms;android-{sdk[1]}', f'platforms;android-{sdk[1]}.0') if p in packages), None)
+    if platform is None:
+        raise RuntimeError(f'Official SDK platform {sdk[1]} is not available')
+    run('sdkmanager', platform)
 
 
 def collect():
