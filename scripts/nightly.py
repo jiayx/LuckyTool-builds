@@ -180,6 +180,33 @@ def has_xposed_metadata(manifest):
     return bool(re.search(r'"xposedmodule"[^\n]*\n\s*A: (?:android:|http://schemas.android.com/apk/res/android:)value[^\n]*=(?:true|\(type 0x12\)0xffffffff)\s*(?:\n|$)', manifest))
 
 
+def validate_xposed(archive, manifest):
+    modern_entry = 'META-INF/xposed/java_init.list'
+    if modern_entry in archive.namelist():
+        entries = [line.strip() for line in archive.read(modern_entry).decode().splitlines()
+                   if line.strip() and not line.lstrip().startswith('#')]
+        if not entries or not all(re.fullmatch(r'[\w$]+(?:\.[\w$]+)+', entry) for entry in entries):
+            raise RuntimeError('Missing or invalid modern Xposed entry point')
+        try:
+            config = archive.read('META-INF/xposed/module.prop').decode()
+        except KeyError as error:
+            raise RuntimeError('Missing modern Xposed module.prop') from error
+        versions = {}
+        for key in ('minApiVersion', 'targetApiVersion'):
+            match = re.search(r'^\s*' + key + r'\s*[=:]\s*(\d+)\s*$', config, re.MULTILINE)
+            if not match or int(match[1]) <= 0:
+                raise RuntimeError(f'Missing or invalid modern Xposed {key}')
+            versions[key] = int(match[1])
+        if versions['targetApiVersion'] < versions['minApiVersion']:
+            raise RuntimeError('Xposed target API is below minimum API')
+        return dict(format='libxposed', **versions)
+    if not has_xposed_metadata(manifest):
+        raise RuntimeError('Missing enabled Xposed module metadata')
+    if 'assets/xposed_init' not in archive.namelist() or not archive.read('assets/xposed_init').strip():
+        raise RuntimeError('Missing Xposed entry point')
+    return dict(format='legacy')
+
+
 def sign():
     artifact = Path('artifact')
     apk = artifact / 'LuckyTool-nightly.apk'
@@ -196,11 +223,8 @@ def sign():
     if 'application-debuggable' in badging:
         raise RuntimeError('Refusing debuggable APK')
     manifest = run(aapt, 'dump', 'xmltree', str(apk), '--file', 'AndroidManifest.xml')
-    if not has_xposed_metadata(manifest):
-        raise RuntimeError('Missing enabled Xposed module metadata')
     with zipfile.ZipFile(apk) as archive:
-        if not archive.read('assets/xposed_init').strip():
-            raise RuntimeError('Missing Xposed entry point')
+        info['xposed'] = validate_xposed(archive, manifest)
     key = Path(os.environ['RUNNER_TEMP']) / 'nightly-signing.p12'
     try:
         key.write_bytes(base64.b64decode(os.environ['SIGNING_KEYSTORE_BASE64'], validate=True))
@@ -239,7 +263,12 @@ def publish():
     if release and not release['draft']:
         raise RuntimeError('Existing published release is incomplete; inspect it before retrying')
     notes = Path(os.environ['RUNNER_TEMP']) / 'release-notes.md'
-    notes.write_text(f'''LuckyTool 非官方 Nightly，适用于 LSPosed。
+    module = json.loads(Path('artifact/build.json').read_text()).get('xposed', {})
+    compatibility = (f"需要支持 libxposed API {module['minApiVersion']} 或更高版本的框架。"
+                     if module.get('format') == 'libxposed' else '适用于传统 Xposed API 框架。')
+    notes.write_text(f'''LuckyTool 非官方 Nightly。
+
+{compatibility}
 
 上游版本：[{sha[:8]}](https://github.com/{UPSTREAM}/commit/{sha})
 

@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import zipfile
 from datetime import datetime, timezone
 import os
 import tempfile
@@ -28,6 +30,29 @@ class Contracts(unittest.TestCase):
             properties.write_text('# project.android.compileSdk=37\n')
             with self.assertRaisesRegex(RuntimeError, 'Cannot determine compile SDK'):
                 nightly.compile_sdk(source)
+
+    def test_xposed_archive_formats_and_incomplete_modern_metadata(self):
+        def check(files, manifest=''):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as archive:
+                for name, content in files.items():
+                    archive.writestr(name, content)
+            with zipfile.ZipFile(buffer) as archive:
+                return nightly.validate_xposed(archive, manifest)
+        files = {'META-INF/xposed/java_init.list': '# entry\nexample.Module\n',
+                 'META-INF/xposed/module.prop': 'minApiVersion=101\ntargetApiVersion=102\n'}
+        self.assertEqual(check(files)['minApiVersion'], 101)
+        for bad in ('', 'minApiVersion=102\ntargetApiVersion=101\n'):
+            with self.assertRaises(RuntimeError):
+                check(dict(files, **{'META-INF/xposed/module.prop': bad}))
+        with self.assertRaises(RuntimeError):
+            check({'META-INF/xposed/java_init.list': 'example.Module'})
+        with self.assertRaises(RuntimeError):
+            check(dict(files, **{'META-INF/xposed/java_init.list': '# comment only'}))
+        manifest = 'A: name="xposedmodule"\n A: android:value=true\n'
+        self.assertEqual(check({'assets/xposed_init': 'example.Module'}, manifest)['format'], 'legacy')
+        with self.assertRaises(RuntimeError):
+            check({}, manifest)
 
     def test_only_complete_published_release_skips_build(self):
         release = {'draft': False, 'assets': [{'name': n} for n in nightly.EXPECTED_ASSETS]}
