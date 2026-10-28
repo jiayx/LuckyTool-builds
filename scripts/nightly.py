@@ -109,6 +109,26 @@ def plan():
         summary.write('New or incomplete release: build required.\n' if build else 'Already published; skipped.\n')
 
 
+def compile_sdk(source):
+    """Read current Gropify properties, with support for older upstream builds."""
+    properties = source / 'gradle.properties'
+    if properties.exists():
+        match = re.search(r'^\s*project\.android\.compileSdk\s*[=:]\s*([^\r\n]+)',
+                          properties.read_text(), re.MULTILINE)
+        if match:
+            value = match[1].strip()
+            if not re.fullmatch(r'[1-9]\d*', value):
+                raise RuntimeError(f'Unsupported project.android.compileSdk: {value!r}')
+            return value
+    config = (source / 'build.gradle.kts').read_text()
+    match = re.search(r'^\s*extra\["compileSdkVersion"\]\s*=\s*(\d+)\s*(?://[^\n]*)?$',
+                      config, re.MULTILINE)
+    if match:
+        return match[1]
+    raise RuntimeError('Cannot determine compile SDK: expected project.android.compileSdk '
+                       'in gradle.properties or extra["compileSdkVersion"] in build.gradle.kts')
+
+
 def prepare():
     source = Path('upstream')
     if run('git', '-C', str(source), 'rev-parse', 'HEAD') != os.environ['UPSTREAM_SHA']:
@@ -127,16 +147,13 @@ def prepare():
     # getVersionCode() increments once during Gradle configuration.
     code = version_code(os.environ['GITHUB_RUN_NUMBER'])
     (source / 'app/version.properties').write_text(f'versionCode={code - 1}\n')
-    config = (source / 'build.gradle.kts').read_text()
-    sdk = re.search(r'extra\["compileSdkVersion"\]\s*=\s*(\d+)', config)
-    if not sdk:
-        raise RuntimeError('Upstream SDK configuration changed; update the workflow')
+    sdk = compile_sdk(source)
     available = run('sdkmanager', '--list')
     packages = {line.split('|')[0].strip() for line in available.splitlines() if '|' in line}
     # Resolve SDK package names with an optional explicit minor version.
-    platform = next((p for p in (f'platforms;android-{sdk[1]}', f'platforms;android-{sdk[1]}.0') if p in packages), None)
+    platform = next((p for p in (f'platforms;android-{sdk}', f'platforms;android-{sdk}.0') if p in packages), None)
     if platform is None:
-        raise RuntimeError(f'Official SDK platform {sdk[1]} is not available')
+        raise RuntimeError(f'Official SDK platform {sdk} is not available')
     run('sdkmanager', platform)
 
 

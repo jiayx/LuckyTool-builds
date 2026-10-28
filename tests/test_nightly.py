@@ -12,6 +12,23 @@ spec.loader.exec_module(nightly)
 
 
 class Contracts(unittest.TestCase):
+    def test_compile_sdk_supports_current_and_legacy_upstream(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / 'build.gradle.kts').write_text('extra["compileSdkVersion"] = 36\n')
+            self.assertEqual(nightly.compile_sdk(source), '36')
+            properties = source / 'gradle.properties'
+            properties.write_text('# project.android.compileSdk=35\nproject.android.compileSdk=37\n')
+            self.assertEqual(nightly.compile_sdk(source), '37')
+            (source / 'build.gradle.kts').write_text('extra["jdkVersion"] = 21\n')
+            self.assertEqual(nightly.compile_sdk(source), '37')
+            properties.write_text('project.android.compileSdk=unknown\n')
+            with self.assertRaisesRegex(RuntimeError, 'Unsupported'):
+                nightly.compile_sdk(source)
+            properties.write_text('# project.android.compileSdk=37\n')
+            with self.assertRaisesRegex(RuntimeError, 'Cannot determine compile SDK'):
+                nightly.compile_sdk(source)
+
     def test_only_complete_published_release_skips_build(self):
         release = {'draft': False, 'assets': [{'name': n} for n in nightly.EXPECTED_ASSETS]}
         self.assertTrue(nightly.published(release))
