@@ -6,7 +6,7 @@
 
 **[前往 Releases 下载安装包](https://github.com/jiayx/LuckyTool-builds/releases)**
 
-下载 `LuckyTool-nightly.apk`，安装后在 LSPosed 中启用并选择作用域。
+下载 `LuckyTool-nightly-<上游提交前 8 位哈希>.apk`（例如 `LuckyTool-nightly-cb27f2be.apk`），安装后在 LSPosed 中启用并选择作用域。
 
 若安装时提示签名不兼容，请先备份配置，卸载已有版本后再安装。
 

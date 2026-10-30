@@ -36,9 +36,22 @@ def run(*args, **kwargs):
     return subprocess.check_output(args, text=True, **kwargs).strip()
 
 
-def published(release):
-    return bool(release and not release['draft'] and
-                EXPECTED_ASSETS <= {a['name'] for a in release['assets']})
+def apk_name(sha):
+    if not re.fullmatch('[0-9a-f]{40}', sha):
+        raise ValueError('Invalid upstream SHA')
+    return f'LuckyTool-nightly-{sha[:8]}.apk'
+
+
+def expected_assets(sha):
+    return (EXPECTED_ASSETS - {'LuckyTool-nightly.apk'}) | {apk_name(sha)}
+
+
+def published(release, sha=None):
+    if not release or release['draft']:
+        return False
+    names = {a['name'] for a in release['assets']}
+    # Keep recognizing historical releases with the original APK name.
+    return EXPECTED_ASSETS <= names or (sha is not None and expected_assets(sha) <= names)
 
 
 def version_code(run_number):
@@ -67,7 +80,7 @@ def release_for_commit(repo, sha):
         for release in releases:
             if f']({link})' not in (release.get('body') or ''):
                 continue
-            if published(release):
+            if published(release, sha):
                 return release
             candidate = candidate or release
         if len(releases) < 100:
@@ -82,7 +95,7 @@ def plan():
     sha = head['sha']
     release = release_for_commit(os.environ['GITHUB_REPOSITORY'], sha)
     tag = release['tag_name'] if release else release_tag(sha)
-    build = not published(release)
+    build = not published(release, sha)
     artifact_run = os.environ['GITHUB_RUN_ID']
     build_number = os.environ['GITHUB_RUN_NUMBER']
     reuse = os.environ.get('REUSE_RUN', '').strip()
@@ -238,14 +251,16 @@ def sign():
         certificate = subprocess.check_output(['keytool', '-exportcert', '-keystore', str(key),
             '-alias', os.environ['SIGNING_KEY_ALIAS'], '-storepass:env', 'SIGNING_STORE_PASSWORD'])
         digest = hashlib.sha256(certificate).hexdigest()
-        signed.replace(apk)
+        info['apk'] = apk_name(info['commit'])
+        signed.replace(artifact / info['apk'])
+        apk.unlink()
         (artifact / 'signed.apk.idsig').unlink(missing_ok=True)
         info['certificate_sha256'] = digest
         (artifact / 'build.json').write_text(json.dumps(info, indent=2) + '\n')
     finally:
         key.unlink(missing_ok=True)
     lines = [f'{hashlib.sha256((artifact / name).read_bytes()).hexdigest()}  {name}'
-             for name in sorted(EXPECTED_ASSETS - {'SHA256SUMS'})]
+             for name in sorted(expected_assets(info['commit']) - {'SHA256SUMS'})]
     (artifact / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
 
 
@@ -256,7 +271,7 @@ def publish():
     if not re.fullmatch(r'nightly-\d{4}-\d{2}-\d{2}-' + sha[:8], tag):
         raise RuntimeError('Release tag does not match upstream commit')
     release = release_for_commit(repo, sha)
-    if published(release):
+    if published(release, sha):
         return
     if release and release['tag_name'] != tag:
         raise RuntimeError('Release changed after planning; retry the workflow')
@@ -272,13 +287,13 @@ def publish():
 
 上游版本：[{sha[:8]}](https://github.com/{UPSTREAM}/commit/{sha})
 
-下载下方附件 `LuckyTool-nightly.apk`，安装后在 LSPosed 中启用并选择作用域。
+下载下方附件 `{apk_name(sha)}`，安装后在 LSPosed 中启用并选择作用域。
 ''')
     if not release:
         run('gh', 'release', 'create', tag, '--repo', repo, '--target', os.environ['GITHUB_SHA'],
             '--draft', '--prerelease', '--title', f'LuckyTool nightly · {tag[8:18]} · {sha[:8]}', '--notes-file', str(notes))
     run('gh', 'release', 'upload', tag, '--repo', repo, '--clobber',
-        *(str(Path('artifact') / name) for name in sorted(EXPECTED_ASSETS)))
+        *(str(Path('artifact') / name) for name in sorted(expected_assets(sha))))
     run('gh', 'release', 'edit', tag, '--repo', repo, '--draft=false', '--prerelease', '--notes-file', str(notes))
 
 

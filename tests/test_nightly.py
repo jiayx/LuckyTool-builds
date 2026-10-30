@@ -1,5 +1,7 @@
 import importlib.util
 import io
+import json
+import hashlib
 import zipfile
 from datetime import datetime, timezone
 import os
@@ -63,6 +65,57 @@ class Contracts(unittest.TestCase):
         release['assets'].pop()
         self.assertFalse(nightly.published(release))
         self.assertFalse(nightly.published(None))
+
+    def test_hashed_release_assets_and_legacy_compatibility(self):
+        sha = 'a' * 40
+        self.assertEqual(nightly.apk_name(sha), 'LuckyTool-nightly-aaaaaaaa.apk')
+        with self.assertRaises(ValueError):
+            nightly.apk_name('../bad')
+        release = {'draft': False, 'assets': [{'name': n} for n in nightly.expected_assets(sha)]}
+        self.assertTrue(nightly.published(release, sha))
+        self.assertFalse(nightly.published(release, 'b' * 40))
+        release['assets'] = [a for a in release['assets'] if a['name'] != 'SHA256SUMS']
+        self.assertFalse(nightly.published(release, sha))
+        release['assets'] = [{'name': n} for n in nightly.EXPECTED_ASSETS]
+        self.assertTrue(nightly.published(release, sha))
+
+    def test_sign_renames_apk_and_checksums_use_published_name(self):
+        sha = 'a' * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / 'artifact'
+            artifact.mkdir()
+            with zipfile.ZipFile(artifact / 'LuckyTool-nightly.apk', 'w') as archive:
+                archive.writestr('META-INF/xposed/java_init.list', 'example.Module')
+                archive.writestr('META-INF/xposed/module.prop', 'minApiVersion=102\ntargetApiVersion=102')
+            (artifact / 'build.json').write_text(json.dumps({'commit': sha, 'versionCode': 1000000001}))
+            (artifact / 'upstream-source.tar.gz').write_bytes(b'source')
+            (root / 'build-tools/37.0.0').mkdir(parents=True)
+            env = {'UPSTREAM_SHA': sha, 'BUILD_RUN_NUMBER': '1', 'ANDROID_HOME': str(root),
+                   'RUNNER_TEMP': str(root), 'SIGNING_KEYSTORE_BASE64': 'a2V5', 'SIGNING_KEY_ALIAS': 'test'}
+            def command(*args):
+                if 'badging' in args:
+                    return "package: name='com.luckyzyx.luckytool' versionCode='1000000001'"
+                if 'sign' in args:
+                    Path(args[args.index('--out') + 1]).write_bytes(b'signed APK')
+                return ''
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, env), patch.object(nightly, 'run', side_effect=command), \
+                     patch.object(nightly.subprocess, 'check_output', return_value=b'certificate'):
+                    nightly.sign()
+            finally:
+                os.chdir(previous)
+            self.assertFalse((artifact / 'LuckyTool-nightly.apk').exists())
+            self.assertEqual((artifact / nightly.apk_name(sha)).read_bytes(), b'signed APK')
+            info = json.loads((artifact / 'build.json').read_text())
+            self.assertEqual(info['apk'], nightly.apk_name(sha))
+            lines = (artifact / 'SHA256SUMS').read_text().splitlines()
+            self.assertEqual(len(lines), 3)
+            for line in lines:
+                digest, name = line.split('  ')
+                self.assertEqual(digest, hashlib.sha256((artifact / name).read_bytes()).hexdigest())
 
     def test_tag_uses_shanghai_date_and_eight_digit_sha(self):
         sha = 'a' * 40
